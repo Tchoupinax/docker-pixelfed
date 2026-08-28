@@ -8,11 +8,11 @@ cp -r storage.skel/* storage/
 cp -r bootstrap.skel/* bootstrap/
 # chown -R www-data:www-data storage/ bootstrap/
 
-# Need to do this because tmp files
-cp /etc/nginx/nginx.conf /tmp/nginx.conf
-sed -i "s/__PORT__/${APP_PORT}/" /tmp/nginx.conf
-sed -i "s/__SERVERNAME__/${APP_DOMAIN}/" /tmp/nginx.conf
-cp /tmp/nginx.conf /etc/nginx/nginx.conf
+# Render nginx config in /tmp (works with read-only root filesystem)
+NGINX_CONF=/tmp/nginx.conf
+cp /etc/nginx/nginx.conf "${NGINX_CONF}"
+sed -i "s/__PORT__/${APP_PORT}/" "${NGINX_CONF}"
+sed -i "s/__SERVERNAME__/${APP_DOMAIN}/" "${NGINX_CONF}"
 
 # Refresh the environment
 php artisan storage:link
@@ -28,4 +28,4 @@ php-fpm${PHP_VERSION} -D &
 if [ "${ENABLE_HORIZON:-false}" = "true" ]; then
     php artisan horizon &
 fi
-nginx -g 'daemon off;'
+nginx -c "${NGINX_CONF}" -g 'daemon off;'
