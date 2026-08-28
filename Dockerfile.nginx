@@ -1,4 +1,4 @@
-FROM debian:trixie-slim
+FROM debian:bookworm-slim
 
 ENV PHP_VERSION=8.4 \
   COMPOSER_HOME=/var/www/.composer \
@@ -9,47 +9,84 @@ ENV PHP_VERSION=8.4 \
 
 WORKDIR /var/www/
 
-COPY --from=composer:2.10.3 /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer:2.10.2 /usr/bin/composer /usr/local/bin/composer
+COPY keys/deb.sury.org-php.gpg /usr/share/keyrings/deb.sury.org-php.gpg
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    nginx \
-    libnginx-mod-rtmp \
-    git \
-    locales \
-    optipng \
-    pngquant \
-    jpegoptim \
-    gifsicle \
-    ffmpeg \
-    mariadb-client \
-    procps \
-    "php${PHP_VERSION}-fpm" \
-    "php${PHP_VERSION}-cli" \
-    "php${PHP_VERSION}-gd" \
-    "php${PHP_VERSION}-imagick" \
-    "php${PHP_VERSION}-redis" \
-    "php${PHP_VERSION}-mysql" \
-    "php${PHP_VERSION}-pgsql" \
-    "php${PHP_VERSION}-sqlite3" \
-    "php${PHP_VERSION}-intl" \
-    "php${PHP_VERSION}-bcmath" \
-    "php${PHP_VERSION}-zip" \
-    "php${PHP_VERSION}-curl" \
-    "php${PHP_VERSION}-mbstring" \
-    "php${PHP_VERSION}-xml" \
-    "php${PHP_VERSION}-opcache" \
-  && sed -i '/en_US/s/^#//g' /etc/locale.gen \
-  && locale-gen en_US.UTF-8 \
-  && update-locale LANG=en_US.UTF-8 \
-  && apt-get purge -y git \
-  && apt-get autoremove -y \
-  && apt-get clean \
-  && rm -rf /usr/share/doc /usr/share/man /var/lib/apt/lists/* /tmp/* /var/cache/apt/*
+RUN set -eux; \
+  printf '%s\n' \
+    'Types: deb' \
+    'URIs: http://snapshot.debian.org/archive/debian/20260701T000000Z' \
+    'Suites: bookworm' \
+    'Components: main' \
+    'Check-Valid-Until: no' \
+    '' \
+    'Types: deb' \
+    'URIs: http://snapshot.debian.org/archive/debian-security/20260701T000000Z' \
+    'Suites: bookworm-security' \
+    'Components: main' \
+    'Check-Valid-Until: no' \
+    > /etc/apt/sources.list.d/debian.sources; \
+  apt_install() { \
+    apt-get \
+      -o Acquire::http::Pipeline-Depth=0 \
+      -o Acquire::http::No-Cache=true \
+      -o Acquire::Retries=5 \
+      "$@"; \
+  }; \
+  apt_update_and_install() { \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    apt_install update; \
+    apt_install install -y --no-install-recommends "$@"; \
+  }; \
+  for attempt in 1 2 3 4 5; do \
+    if apt_update_and_install ca-certificates; then break; fi; \
+    echo "apt bootstrap failed (attempt ${attempt}/5), retrying..." >&2; \
+    [ "${attempt}" -eq 5 ] && exit 1; \
+    sleep $((attempt * 3)); \
+  done; \
+  echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main" \
+    > /etc/apt/sources.list.d/php.list; \
+  for attempt in 1 2 3 4 5; do \
+    if apt_update_and_install \
+      nginx \
+      libnginx-mod-rtmp \
+      curl \
+      locales \
+      optipng \
+      pngquant \
+      jpegoptim \
+      gifsicle \
+      ffmpeg \
+      mariadb-client \
+      procps \
+      "php${PHP_VERSION}-fpm" \
+      "php${PHP_VERSION}-cli" \
+      "php${PHP_VERSION}-gd" \
+      "php${PHP_VERSION}-imagick" \
+      "php${PHP_VERSION}-redis" \
+      "php${PHP_VERSION}-mysql" \
+      "php${PHP_VERSION}-pgsql" \
+      "php${PHP_VERSION}-sqlite3" \
+      "php${PHP_VERSION}-intl" \
+      "php${PHP_VERSION}-bcmath" \
+      "php${PHP_VERSION}-zip" \
+      "php${PHP_VERSION}-curl" \
+      "php${PHP_VERSION}-mbstring" \
+      "php${PHP_VERSION}-xml" \
+      "php${PHP_VERSION}-opcache"; then break; fi; \
+    echo "apt install failed (attempt ${attempt}/5), retrying..." >&2; \
+    [ "${attempt}" -eq 5 ] && exit 1; \
+    sleep $((attempt * 3)); \
+  done; \
+  sed -i '/en_US/s/^#//g' /etc/locale.gen; \
+  locale-gen en_US.UTF-8; \
+  update-locale LANG=en_US.UTF-8; \
+  apt-get clean; \
+  rm -rf /usr/share/doc /usr/share/man /var/lib/apt/lists/* /tmp/* /var/cache/apt/*
 
 ARG BRANCH=dev
-RUN git clone --depth 1 --branch "${BRANCH}" https://github.com/pixelfed/pixelfed.git /var/www \
-  && rm -rf /var/www/.git
+RUN curl -fsSL "https://github.com/pixelfed/pixelfed/tarball/${BRANCH}" \
+  | tar xz --strip-components=1 -C /var/www
 
 COPY nginx.conf start.nginx.sh /var/www/contrib/docker/
 COPY php.production.ini "/etc/php/${PHP_VERSION}/fpm/php.ini"
