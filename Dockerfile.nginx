@@ -1,115 +1,80 @@
-FROM php:8.5.9-fpm-bookworm
+FROM debian:trixie-slim
 
-ARG BRANCH=dev
-
-# Install Composer
-ENV COMPOSER_VERSION=2.10.3 \
+ENV PHP_VERSION=8.4 \
   COMPOSER_HOME=/var/www/.composer \
   COMPOSER_MEMORY_LIMIT=-1 \
-  PATH="~/.composer/vendor/bin:./vendor/bin:${PATH}" \
-  DEBIAN_FRONTEND=noninteractive
+  COMPOSER_ALLOW_SUPERUSER=1 \
+  DEBIAN_FRONTEND=noninteractive \
+  LANG=en_US.UTF-8
+
 WORKDIR /var/www/
-ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/download/2.11.12/install-php-extensions /usr/local/bin/
-RUN set +x \
-  && curl -o /tmp/composer-setup.php https://getcomposer.org/installer \
-  && curl -o /tmp/composer-setup.sig https://composer.github.io/installer.sig \
-  && php -r "if (hash('SHA384', file_get_contents('/tmp/composer-setup.php')) !== trim(file_get_contents('/tmp/composer-setup.sig'))) { unlink('/tmp/composer-setup.php'); echo 'Invalid installer' . PHP_EOL; exit(1); }" \
-  && php /tmp/composer-setup.php --no-ansi --install-dir=/usr/local/bin --filename=composer --version=${COMPOSER_VERSION} && rm -rf /tmp/composer-setup.php \
-  && apt-get update \
-  && apt-get upgrade -y --no-install-recommends \
+
+COPY --from=composer:2.10.3 /usr/bin/composer /usr/local/bin/composer
+
+RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-  ## Standard
-  nginx \
-  libnginx-mod-rtmp \
-  locales \
-  locales-all \
-  git \
-  gosu \
-  zip \
-  unzip \
-  libzip-dev \
-  libcurl4-openssl-dev \
-  m4 \
-  ## Image Optimization
-  optipng \
-  pngquant \
-  jpegoptim \
-  gifsicle \
-  ## Image Processing
-  libjpeg62-turbo-dev \
-  libpng-dev \
-  libmagickwand-dev \
-  # Required for GD
-  libxpm4 \
-  libxpm-dev \
-  libwebp7 \
-  libwebp-dev \
-  ## Video Processing
-  ffmpeg \
-  ## Database
-  libpq-dev \
-  libsqlite3-dev \
-  mariadb-client \
-  # Utilities
-  procps \
-  telnet \
-  # Locales Update
+    nginx \
+    libnginx-mod-rtmp \
+    git \
+    locales \
+    optipng \
+    pngquant \
+    jpegoptim \
+    gifsicle \
+    ffmpeg \
+    mariadb-client \
+    procps \
+    "php${PHP_VERSION}-fpm" \
+    "php${PHP_VERSION}-cli" \
+    "php${PHP_VERSION}-gd" \
+    "php${PHP_VERSION}-imagick" \
+    "php${PHP_VERSION}-redis" \
+    "php${PHP_VERSION}-mysql" \
+    "php${PHP_VERSION}-pgsql" \
+    "php${PHP_VERSION}-sqlite3" \
+    "php${PHP_VERSION}-intl" \
+    "php${PHP_VERSION}-bcmath" \
+    "php${PHP_VERSION}-zip" \
+    "php${PHP_VERSION}-curl" \
+    "php${PHP_VERSION}-mbstring" \
+    "php${PHP_VERSION}-xml" \
+    "php${PHP_VERSION}-opcache" \
   && sed -i '/en_US/s/^#//g' /etc/locale.gen \
-  && locale-gen \
-  && update-locale \
-  # Install PHP extensions
-  && docker-php-source extract \
-  # PHP GD extensions
-  && docker-php-ext-configure gd \
-  --with-freetype \
-  --with-jpeg \
-  --with-webp \
-  --with-xpm \
-  && docker-php-ext-install gd \
-  #PHP Imagemagick extensions
-  && install-php-extensions imagick \
-  #PHP Redis extensions
-  && pecl install redis \
-  && docker-php-ext-enable redis \
-  #PHP Database extensions
-  && docker-php-ext-install pdo_mysql pdo_pgsql pdo_sqlite \
-  #PHP extensions (dependencies)
-  && docker-php-ext-configure intl \
-  && docker-php-ext-install intl bcmath zip pcntl exif curl ffi \
-  #Cleanup
-  && docker-php-source delete \
-  && apt-get autoremove --purge -y \
+  && locale-gen en_US.UTF-8 \
+  && update-locale LANG=en_US.UTF-8 \
+  && apt-get purge -y git \
+  && apt-get autoremove -y \
   && apt-get clean \
-  && rm -rf /var/cache/apt \
-  && rm -rf /var/lib/apt/lists/
+  && rm -rf /usr/share/doc /usr/share/man /var/lib/apt/lists/* /tmp/* /var/cache/apt/*
 
-RUN cd /var && rm -fr www && git clone https://github.com/pixelfed/pixelfed.git www && cd www && git checkout ${BRANCH}
+ARG BRANCH=dev
+RUN git clone --depth 1 --branch "${BRANCH}" https://github.com/pixelfed/pixelfed.git /var/www \
+  && rm -rf /var/www/.git
+
 COPY nginx.conf start.nginx.sh /var/www/contrib/docker/
-
-# Use the default production configuration
-COPY php.production.ini "$PHP_INI_DIR/php.ini"
+COPY php.production.ini "/etc/php/${PHP_VERSION}/fpm/php.ini"
 
 # for detail why storage is copied this way, pls refer to https://github.com/pixelfed/pixelfed/pull/2137#discussion_r434468862
-RUN cp -r storage storage.skel \
+RUN --mount=type=cache,target=/var/www/.composer/cache \
+  cp "/etc/php/${PHP_VERSION}/fpm/php.ini" "/etc/php/${PHP_VERSION}/cli/php.ini" \
+  && cp -r storage storage.skel \
   && cp -r bootstrap bootstrap.skel \
   && cp /var/www/contrib/docker/nginx.conf /etc/nginx \
-  && composer update --with-all-dependencies --no-security-blocking \
-  && composer install --prefer-dist --no-interaction --no-ansi --optimize-autoloader \
+  && composer update --with-all-dependencies --no-security-blocking --no-interaction --prefer-dist --optimize-autoloader --no-ansi \
   && rm -rf html && ln -s public html \
-  && mkdir -p /var/lib/nginx \
-  && chown -R www-data:www-data /etc/nginx/nginx.conf /var/www /var/lib/nginx \
+  && mkdir -p /var/lib/nginx /run/php-fpm \
+  && chown -R www-data:www-data /etc/nginx/nginx.conf /var/www /var/lib/nginx /run/php-fpm \
   && find /var/www -type d -exec chmod 755 {} \; \
   && find /var/www -type f -exec chmod 644 {} \; \
   && chmod 755 /var/www/contrib/docker/start.nginx.sh \
   && chmod 1777 /run \
-  && mkdir -p /run/php-fpm \
-  && chown www-data:www-data /run/php-fpm \
-  && sed -i 's/^.*listen = 127.0.0.1:9000/listen = \/run\/php-fpm\/php-fpm.sock/' /usr/local/etc/php-fpm.d/www.conf \
-  # since we're specifing running as the www-data user below, we can remove the following lines from our php-fpm config to avoid a benign warning
-  && sed -i '/user = www-data/d' /usr/local/etc/php-fpm.d/www.conf \
-  && sed -i '/group = www-data/d' /usr/local/etc/php-fpm.d/www.conf \
-  && rm -f /usr/local/etc/php-fpm.d/zz-docker.conf \
+  && sed -i \
+    -e 's|^listen = .*|listen = /run/php-fpm/php-fpm.sock|' \
+    -e '/^user = /d' \
+    -e '/^group = /d' \
+    "/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf" \
   && php artisan storage:link
+
 VOLUME /var/www/storage /var/www/bootstrap
 
 USER www-data

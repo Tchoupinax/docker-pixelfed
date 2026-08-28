@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PATH=/usr/local/bin:$PATH
+PATH=/usr/local/bin:/usr/sbin:/usr/bin:$PATH
 cd /var/www
 
 # Create the storage tree if needed and fix permissions
@@ -24,7 +24,7 @@ php artisan migrate --force
 php artisan instance:actor
 
 # Finally run everything
-php-fpm -D &
+php-fpm${PHP_VERSION} -D &
 if [ "${ENABLE_HORIZON:-false}" = "true" ]; then
     php artisan horizon &
 fi
