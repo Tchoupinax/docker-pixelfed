@@ -1,6 +1,9 @@
-FROM debian:bookworm-slim
+FROM debian:trixie-20261104-slim
 
-ENV PHP_VERSION=8.4 \
+ARG PHP_VERSION=8.5
+ARG PHP_MIN_VERSION=8.5.13
+ENV PHP_VERSION=${PHP_VERSION} \
+  PHP_MIN_VERSION=${PHP_MIN_VERSION} \
   COMPOSER_HOME=/var/www/.composer \
   COMPOSER_MEMORY_LIMIT=-1 \
   COMPOSER_ALLOW_SUPERUSER=1 \
@@ -9,20 +12,20 @@ ENV PHP_VERSION=8.4 \
 
 WORKDIR /var/www/
 
-COPY --from=composer:2.10.2 /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer:2.11.2 /usr/bin/composer /usr/local/bin/composer
 COPY keys/deb.sury.org-php.gpg /usr/share/keyrings/deb.sury.org-php.gpg
 
 RUN set -eux; \
   printf '%s\n' \
     'Types: deb' \
-    'URIs: http://snapshot.debian.org/archive/debian/20260701T000000Z' \
-    'Suites: bookworm' \
+    'URIs: http://snapshot.debian.org/archive/debian/20261121T144936Z' \
+    'Suites: trixie' \
     'Components: main' \
     'Check-Valid-Until: no' \
     '' \
     'Types: deb' \
-    'URIs: http://snapshot.debian.org/archive/debian-security/20260701T000000Z' \
-    'Suites: bookworm-security' \
+    'URIs: http://snapshot.debian.org/archive/debian-security/20261121T144936Z' \
+    'Suites: trixie-security' \
     'Components: main' \
     'Check-Valid-Until: no' \
     > /etc/apt/sources.list.d/debian.sources; \
@@ -36,6 +39,7 @@ RUN set -eux; \
   apt_update_and_install() { \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     apt_install update; \
+    apt_install upgrade -y --no-install-recommends; \
     apt_install install -y --no-install-recommends "$@"; \
   }; \
   for attempt in 1 2 3 4 5; do \
@@ -44,12 +48,15 @@ RUN set -eux; \
     [ "${attempt}" -eq 5 ] && exit 1; \
     sleep $((attempt * 3)); \
   done; \
-  echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main" \
+  echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ trixie main" \
     > /etc/apt/sources.list.d/php.list; \
+  php_pkgs="php${PHP_VERSION}-fpm php${PHP_VERSION}-cli php${PHP_VERSION}-gd php${PHP_VERSION}-imagick php${PHP_VERSION}-redis php${PHP_VERSION}-mysql php${PHP_VERSION}-pgsql php${PHP_VERSION}-sqlite3 php${PHP_VERSION}-intl php${PHP_VERSION}-bcmath php${PHP_VERSION}-zip php${PHP_VERSION}-curl php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml"; \
+  if [ "${PHP_VERSION}" = "8.4" ]; then \
+    php_pkgs="${php_pkgs} php${PHP_VERSION}-opcache"; \
+  fi; \
   for attempt in 1 2 3 4 5; do \
     if apt_update_and_install \
       nginx \
-      libnginx-mod-rtmp \
       curl \
       locales \
       optipng \
@@ -59,25 +66,19 @@ RUN set -eux; \
       ffmpeg \
       mariadb-client \
       procps \
-      "php${PHP_VERSION}-fpm" \
-      "php${PHP_VERSION}-cli" \
-      "php${PHP_VERSION}-gd" \
-      "php${PHP_VERSION}-imagick" \
-      "php${PHP_VERSION}-redis" \
-      "php${PHP_VERSION}-mysql" \
-      "php${PHP_VERSION}-pgsql" \
-      "php${PHP_VERSION}-sqlite3" \
-      "php${PHP_VERSION}-intl" \
-      "php${PHP_VERSION}-bcmath" \
-      "php${PHP_VERSION}-zip" \
-      "php${PHP_VERSION}-curl" \
-      "php${PHP_VERSION}-mbstring" \
-      "php${PHP_VERSION}-xml" \
-      "php${PHP_VERSION}-opcache"; then break; fi; \
+      $php_pkgs; then break; fi; \
     echo "apt install failed (attempt ${attempt}/5), retrying..." >&2; \
     [ "${attempt}" -eq 5 ] && exit 1; \
     sleep $((attempt * 3)); \
   done; \
+  case "${PHP_VERSION}" in \
+    8.4|8.5) ;; \
+    *) echo "unsupported PHP_VERSION ${PHP_VERSION}" >&2; exit 1 ;; \
+  esac; \
+  if ! php -r 'exit(version_compare(PHP_VERSION, getenv("PHP_MIN_VERSION"), ">=") ? 0 : 1);'; then \
+    echo "PHP $(php -r 'echo PHP_VERSION;') is below the required security release ${PHP_MIN_VERSION}" >&2; \
+    exit 1; \
+  fi; \
   sed -i '/en_US/s/^#//g' /etc/locale.gen; \
   locale-gen en_US.UTF-8; \
   update-locale LANG=en_US.UTF-8; \
@@ -101,7 +102,8 @@ RUN --mount=type=cache,target=/var/www/.composer/cache \
   && cp -r storage storage.skel \
   && cp -r bootstrap bootstrap.skel \
   && cp /var/www/contrib/docker/nginx.conf /etc/nginx \
-  && composer update --with-all-dependencies --no-security-blocking --no-interaction --prefer-dist --optimize-autoloader --no-ansi \
+  && composer update --with-all-dependencies --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-ansi \
+  && composer audit --no-dev --abandoned=report --no-interaction --no-ansi \
   && rm -rf html && ln -s public html \
   && mkdir -p /var/lib/nginx /run/php-fpm \
   && chown -R www-data:www-data /etc/nginx/nginx.conf /var/www /var/lib/nginx /run/php-fpm \
